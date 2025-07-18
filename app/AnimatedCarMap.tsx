@@ -92,50 +92,58 @@ function getOptimalSpeedProfilePerSegment(
   return profiles;
 }
 
-export default function AnimatedCarMap() {
-  console.log("Google Maps API Key (AnimatedCarMap):", process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY);
-  const { isLoaded, loadError } = useJsApiLoader({
-    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
-  });
+// --- VEHICLE BEHAVIOR TYPES ---
+const behaviorTypes = [
+  { type: "slow", baseSpeed: 40, variance: 5 },    // 0–45 km/h
+  { type: "medium", baseSpeed: 55, variance: 5 },  // 45–55 km/h
+  { type: "fast", baseSpeed: 70, variance: 5 },    // 55+ km/h
+];
 
-  // --- MOCK DATA GENERATION FOR 3 VEHICLES ---
-  function generateVehicleData(vehicleId: string, baseSpeed: number, speedVariance: number) {
-    const data = [];
-    let timestamp = Date.now();
-    for (let i = 0; i < stuttgartRoute.length; i++) {
-      const speed = baseSpeed + (Math.random() - 0.5) * speedVariance;
-      data.push({
-        vehicleId,
-        timestamp,
-        lat: stuttgartRoute[i].lat,
-        lng: stuttgartRoute[i].lng,
-        speed: Math.round(speed * 100) / 100,
-      });
-      timestamp += 1000 + Math.random() * 500;
-    }
-    return data;
-  }
+// Assign dominant behavior type to each segment: 2 slow, 3 medium, 2 fast
+const segmentBehaviors = [
+  behaviorTypes[0], // slow
+  behaviorTypes[0], // slow
+  behaviorTypes[1], // medium
+  behaviorTypes[1], // medium
+  behaviorTypes[1], // medium
+  behaviorTypes[2], // fast
+  behaviorTypes[2], // fast
+];
 
-  function generateFixedVehicleData(vehicleId: string, speeds: number[]) {
-    return stuttgartRoute.map((pt, i) => ({
+function generateRandomVehicleData(vehicleId: string) {
+  // For each segment, use the segment's dominant behavior type
+  return stuttgartRoute.map((pt, i) => {
+    const behavior = segmentBehaviors[i];
+    return {
       vehicleId,
       timestamp: Date.now() + i * 1000,
       lat: pt.lat,
       lng: pt.lng,
-      speed: speeds[i],
-    }));
-  }
+      speed:
+        behavior.baseSpeed + (Math.random() - 0.5) * 2 * behavior.variance,
+      behavior: behavior.type,
+    };
+  });
+}
+
+const VEHICLE_COUNT = 1000;
+
+export default function AnimatedCarMap() {
+  const { isLoaded, loadError } = useJsApiLoader({
+    googleMapsApiKey: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "",
+  });
 
   // --- FIX: Generate vehicle data on client only ---
   const [vehicles, setVehicles] = useState<VehicleDataPoint[][] | null>(null);
 
   useEffect(() => {
-    // You can use either generateVehicleData or generateFixedVehicleData here
-    setVehicles([
-      generateFixedVehicleData("car-1", [45, 45, 55, 55, 55, 51, 51]),
-      generateFixedVehicleData("car-2", [45, 45, 55, 55, 55, 51, 51]),
-      generateFixedVehicleData("car-3", [45, 45, 55, 55, 55, 51, 51]),
-    ]);
+    // Generate data for 1000 vehicles
+    const allVehicles = [];
+    for (let i = 1; i <= VEHICLE_COUNT; i++) {
+      allVehicles.push(generateRandomVehicleData(`car-${i}`));
+    }
+    setVehicles(allVehicles);
+    console.log("Generated vehicles:", allVehicles.length, allVehicles[0]);
   }, []);
 
   const allData = useMemo(() => {
@@ -143,10 +151,32 @@ export default function AnimatedCarMap() {
     return vehicles.flat();
   }, [vehicles]);
 
+  useEffect(() => {
+    if (allData.length > 0) {
+      console.log("allData sample:", allData.slice(0, 5));
+    }
+  }, [allData]);
+
   const cruiseProfile = useMemo(
     () => getOptimalSpeedProfilePerSegment(allData, stuttgartRoute),
     [allData]
   );
+
+  useEffect(() => {
+    if (cruiseProfile.length > 0) {
+      console.log("cruiseProfile sample:", cruiseProfile);
+    }
+  }, [cruiseProfile]);
+
+  // Only animate the first car (car-1)
+  const animatedCarData = vehicles ? vehicles[0] : null;
+
+  // Log segment average speeds only when vehicles and cruiseProfile are ready
+  useEffect(() => {
+    if (vehicles && cruiseProfile.some(p => p.avgSpeed !== 0)) {
+      console.log("Segment average speeds:", cruiseProfile.map(p => p.avgSpeed));
+    }
+  }, [vehicles, cruiseProfile]);
 
   // --- ANIMATION STATE ---
   const [carIndex, setCarIndex] = useState(0);
@@ -244,13 +274,35 @@ export default function AnimatedCarMap() {
 
   // Helper to get color based on speed
   function getSpeedColor(speed: number) {
-    if (speed < 49) return "#00c853"; // Green for slow
-    if (speed < 52) return "#ffd600"; // Yellow for medium
+    if (speed < 55) return "#00c853"; // Green for slow
+    if (speed < 60) return "#ffd600"; // Yellow for medium
     return "#d50000"; // Red for fast
+  }
+
+  // Helper to download all logs as JSON
+  function downloadLogs() {
+    const logs = {
+      vehicles, // array of arrays (each vehicle's data points)
+      cruiseProfile, // array of segment profiles
+      segmentAverageSpeeds: cruiseProfile.map(p => p.avgSpeed), // array of avg speeds
+    };
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(logs, null, 2));
+    const downloadAnchorNode = document.createElement('a');
+    downloadAnchorNode.setAttribute("href", dataStr);
+    downloadAnchorNode.setAttribute("download", "all_segment_logs.json");
+    document.body.appendChild(downloadAnchorNode);
+    downloadAnchorNode.click();
+    downloadAnchorNode.remove();
   }
 
   return (
     <>
+      {/* Download Logs Button */}
+      <div style={{ position: "fixed", top: 16, right: 16, zIndex: 2000 }}>
+        <button onClick={downloadLogs} style={{ padding: "8px 16px", borderRadius: 8, background: "#222", color: "#fff", border: "none", fontWeight: "bold", cursor: "pointer" }}>
+          Download Segment Logs
+        </button>
+      </div>
       {/* Overlays: info and cruise profile, now at the bottom half, side by side */}
       <div style={{
         position: "fixed",
@@ -313,16 +365,19 @@ export default function AnimatedCarMap() {
           <div style={{ fontWeight: "bold", marginBottom: 8 }}>Segment → Cruise Speed</div>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <tbody>
-              {cruiseProfile.map((profile) => (
-                <tr key={profile.segmentIndex} style={{ background: carIndex === profile.segmentIndex ? "#333" : "none" }}>
-                  <td style={{ padding: "2px 8px 2px 0", textAlign: "right", fontWeight: carIndex === profile.segmentIndex ? "bold" : undefined }}>
-                    {profile.segmentIndex}
-                  </td>
-                  <td style={{ padding: "2px 0 2px 8px", color: getSpeedColor(profile.avgSpeed), fontWeight: carIndex === profile.segmentIndex ? "bold" : undefined }}>
-                    {profile.avgSpeed.toFixed(1)} km/h
-                  </td>
-                </tr>
-              ))}
+              {cruiseProfile.map((profile) => {
+                // console.log("Table row:", profile);
+                return (
+                  <tr key={profile.segmentIndex} style={{ background: carIndex === profile.segmentIndex ? "#333" : "none" }}>
+                    <td style={{ padding: "2px 8px 2px 0", textAlign: "right", fontWeight: carIndex === profile.segmentIndex ? "bold" : undefined }}>
+                      {profile.segmentIndex}
+                    </td>
+                    <td style={{ padding: "2px 0 2px 8px", color: getSpeedColor(profile.avgSpeed), fontWeight: carIndex === profile.segmentIndex ? "bold" : undefined }}>
+                      {profile.avgSpeed.toFixed(1)} km/h
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
